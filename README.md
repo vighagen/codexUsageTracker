@@ -2,6 +2,10 @@
 
 A floating smoky-quartz companion for Mako that shows the **remaining weekly Codex limit** inside the orb. Its faceted glass, champagne rim, and smoky wisps follow the supplied fantasy-orb reference.
 
+![Mako Orb hover demo: smoke and inner shimmer animate on hover, then pause](docs/orb-hover.gif)
+
+*Rendered from the app with example usage (77%): 2 seconds idle, a full 12-second hover cycle, then 2 seconds paused. [Still preview](docs/orb-hover.png).*
+
 Double-click **Mako Orb.app** to launch it. Drag it beside Mako. Right-click the orb (or use its small menu-bar icon) to refresh, change its size or colour scheme, bring it back into view, or quit.
 
 Hover over the orb to reveal two buttons: **New chat** (compose icon) and **Voice chat** (waveform icon). The smoke moves through a very slow 12-second cycle only while hovered, then pauses. A subtle shimmer inside the glass shares the same hover clock: both effects pause on exit and resume on re-entry. The percentage remains still. The animation respects macOS Reduce Motion.
@@ -39,3 +43,7 @@ open "Mako Orb.app"
 The build creates a locally signed app for your Mac and runs the included usage, hover-clock, smoke, shimmer, and colour checks. Core Image's runtime shader API currently produces deprecation warnings but is verified working on the development Mac.
 
 A prebuilt macOS app archive is provided under `dist/`. It is ad-hoc signed, not notarized; building locally is the recommended installation route.
+
+## Regenerate the preview
+
+Run `python3 scripts/render-preview.py` on macOS to render the GIF and PNG from the production view and shader code. The preview uses a fixed example percentage and does not connect to your Codex account.

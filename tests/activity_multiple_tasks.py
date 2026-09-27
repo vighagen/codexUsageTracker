@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='orb-activity-test-') as directory:
         message=receive()
         assert message['method']=='thread-stream-following-changed'
         subscriptions.add(message['params']['conversationId'])
-    assert 'project' in subscriptions, 'Project outside the former 64-task window must be followed' 
+    assert 'project' in subscriptions, 'Project outside the former 64-task window must be followed'
     def change(value,task="fixture"):
         send({'type':'broadcast','method':'thread-stream-state-changed','version':11,'sourceClientId':'fixture-owner',
               'params':{'hostId':'local','conversationId':task,'change':value}})

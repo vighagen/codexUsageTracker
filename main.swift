@@ -52,9 +52,12 @@ final class UsageClient {
 
     private func connect() {
         disconnect()
-        let candidates = ["/Applications/ChatGPT.app/Contents/Resources/codex",
-                          "/Applications/Codex.app/Contents/Resources/codex",
-                          "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+        let appRoots = [NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")?.path,
+                        "/Applications/ChatGPT.app", "/Applications/Codex.app"].compactMap { $0 }
+        let candidates = appRoots.flatMap { root in
+            ["Contents/Resources/codex-cli/bin/codex", "Contents/Resources/codex",
+             "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"].map { root + "/" + $0 }
+        } + ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
         guard let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             onUpdate?(nil, "Codex was not found. Open Codex, then refresh."); return
         }

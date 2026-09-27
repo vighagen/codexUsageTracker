@@ -1,0 +1,7 @@
+Use case: stylized-concept
+Asset type: transparent game UI sprite for a floating desktop orb, square 1024x1024.
+Primary request: Create ONE orb closely matching the LEFTMOST smoky quartz orb in the attached style reference. The reference is style guidance only; do not reproduce its five-orb lineup or background.
+Subject: centered round dark smoky quartz glass sphere, hand-painted faceted low-resolution fantasy RPG inventory-art aesthetic, warm taupe and champagne-bronze glass rim, cream specular highlight at upper left, subtle chunky facets/refractions around the perimeter. Muted smoky tendrils curl irregularly outside the sphere, especially above and below, like the reference. Dark rich brown-gray interior with a calm dark center where the app will draw a live number. No glyphs or symbols.
+Geometry: exact sphere center at (512,512), sphere diameter about 650 pixels, smoke fits within the central 940x940 region with fully transparent padding at all outer edges. Front facing perfect circle, no perspective tilt. Match the reference's blocky painted crystal texture, avoid smooth vector UI gradients and avoid neon cyan.
+Background: genuinely transparent RGBA; no colored background, no checkerboard pattern, no rectangle, no ground plane or cast shadow. Keep the sphere itself dark and nearly opaque so white text will read on any desktop; only the smoke and outer edges have soft transparency.
+Text: none. Do NOT draw a percentage, letters, numbers, label, border UI ring, or progress gauge. The live text will be composited by code.

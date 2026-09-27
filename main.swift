@@ -148,6 +148,10 @@ final class UsageClient {
 final class OrbView: NSView {
     var usage: WeeklyUsage? { didSet { updateAccessibility(); needsDisplay = true } }
     var issue: String? { didSet { updateAccessibility(); needsDisplay = true } }
+    var workingTasks = 0 { didSet { updateMotion(); updateAccessibility(); needsDisplay = true } }
+    var activityConnected = false { didSet { updateAccessibility() } }
+    private var activityClock = HoverClock()
+    private var activityTime: TimeInterval = 0
     var showMenu: ((NSEvent) -> Void)?
     var savePosition: (() -> Void)?
     var onAction: ((OrbAction) -> Void)?
@@ -218,20 +222,7 @@ final class OrbView: NSView {
     private func setHovered(_ hovered: Bool) {
         guard hovered != isHovered else { return }
         isHovered = hovered
-        let animate = hovered && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        hoverClock.setActive(animate, now: CACurrentMediaTime())
-        motionTimer?.invalidate(); motionTimer = nil
-        if animate {
-            shimmerStarted = true
-            let timer = Timer(timeInterval: 1 / 20, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                self.frameTime = self.hoverClock.phaseTime(at: CACurrentMediaTime())
-                self.refreshFrame()
-            }
-            timer.tolerance = 0.01
-            RunLoop.main.add(timer, forMode: .common)
-            motionTimer = timer
-        }
+        updateMotion()
         if hovered { chatButton.isHidden = false; voiceButton.isHidden = false }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
@@ -243,6 +234,33 @@ final class OrbView: NSView {
         }
         needsDisplay = true
     }
+    private func updateMotion() {
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animateHover = isHovered && !reduced
+        let animateActivity = workingTasks > 0 && !reduced
+        let now = CACurrentMediaTime()
+        hoverClock.setActive(animateHover, now: now)
+        activityClock.setActive(animateActivity, now: now)
+        motionTimer?.invalidate(); motionTimer = nil
+        if animateHover { shimmerStarted = true }
+        guard animateHover || animateActivity else { return }
+        let timer = Timer(timeInterval: 1 / 20, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = CACurrentMediaTime()
+            if self.hoverClock.isActive {
+                self.frameTime = self.hoverClock.phaseTime(at: now)
+                self.refreshFrame()
+            }
+            self.activityTime = self.activityClock.phaseTime(at: now)
+            self.needsDisplay = true
+        }
+        timer.tolerance = 0.01
+        RunLoop.main.add(timer, forMode: .common); motionTimer = timer
+    }
+    private var activityDescription: String {
+        if !activityConnected { return "Task activity unavailable" }
+        return workingTasks > 0 ? "AI working · \(workingTasks) active task\(workingTasks == 1 ? "" : "s")" : "AI idle or waiting for input"
+    }
     var currentUsage: WeeklyUsage? { issue == nil && usage?.isCurrent() == true ? usage : nil }
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { false }
@@ -251,8 +269,8 @@ final class OrbView: NSView {
         let text = currentUsage.map { "\($0.display) weekly limit remaining" } ?? "Weekly usage unavailable"
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Codex Usage Tracker. \(text).")
-        toolTip = issue ?? "\(text)\nHover for chat and voice · Drag to move\nUpdates every minute"
+        setAccessibilityLabel("Codex Usage Tracker. \(text). \(activityDescription).")
+        toolTip = issue ?? "\(text)\n\(activityDescription)\nHover for chat and voice · Drag to move\nUpdates every minute"
     }
 
     private let artwork: NSImage? = Bundle.main.url(forResource: "smoky-quartz", withExtension: "png")
@@ -263,6 +281,10 @@ final class OrbView: NSView {
         context.saveGState()
         defer { context.restoreGState() }
         context.scaleBy(x: bounds.width / 104, y: bounds.height / 104)
+        let workingPhase = activityTime * .pi * 2 / 4
+        if workingTasks > 0 && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            context.translateBy(x: 0, y: sin(workingPhase) * 1.6)
+        }
         let available = currentUsage != nil
         // Preserve the supplied artwork's alpha; leave padding for the smoky silhouette.
         NSGraphicsContext.current?.imageInterpolation = .high
@@ -275,6 +297,21 @@ final class OrbView: NSView {
         } else {
             NSColor(calibratedRed: 0.18, green: 0.14, blue: 0.13, alpha: 0.97).setFill()
             NSBezierPath(ovalIn: NSRect(x: 23, y: 21, width: 58, height: 58)).fill()
+        }
+        if workingTasks > 0 {
+            let phase = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : workingPhase
+            let angle = CGFloat(phase * 180 / .pi)
+            context.saveGState()
+            let highlight = palette.accent.blended(withFraction: 0.7, of: .white)!
+            context.setShadow(offset: .zero, blur: 2.4, color: highlight.withAlphaComponent(0.65).cgColor)
+            for (offset, opacity) in [(CGFloat(0), CGFloat(0.85)), (CGFloat(180), CGFloat(0.35))] {
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: NSPoint(x: 51.7, y: 50.4), radius: 28.8,
+                              startAngle: angle + offset, endAngle: angle + offset + 48)
+                arc.lineWidth = 1.15; arc.lineCapStyle = .round
+                highlight.withAlphaComponent(opacity).setStroke(); arc.stroke()
+            }
+            context.restoreGState()
         }
         // The glass sphere is slightly below the center of the full smoky asset.
         let center = NSPoint(x: 51.5, y: 49.5)
@@ -315,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NSPanel!
     private var orb: OrbView!
     private let client = UsageClient()
+    private let activity = ActivityMonitor()
     private let codexActions = CodexActions()
     private var statusItem: NSStatusItem!
     private var redrawTimer: Timer?
@@ -362,6 +400,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.orb.usage = usage
             self.statusItem.button?.toolTip = usage.map { "Codex Usage Tracker · \($0.display) weekly remaining" } ?? issue
         }
+        activity.onUpdate = { [weak self] count, connected in
+            guard let self else { return }
+            if self.orb.workingTasks != count { self.orb.workingTasks = count }
+            self.orb.activityConnected = connected
+        }
+        activity.start()
         client.start()
         redrawTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -373,7 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         panel?.orderFrontRegardless(); client.refresh(); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { client.stop(); savePosition() }
+    func applicationWillTerminate(_ notification: Notification) { client.stop(); activity.stop(); savePosition() }
     private func savePosition() {
         guard let panel else { return }
         UserDefaults.standard.set(panel.frame.origin.x, forKey: "orbX")
@@ -446,6 +490,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 if CommandLine.arguments.contains("--self-test") {
     runUsageTests()
     runInteractionTests()
+    runActivityTests()
+} else if CommandLine.arguments.contains("--activity-check") {
+    let monitor = ActivityMonitor()
+    monitor.onUpdate = { count, connected in print("Activity connected: \(connected), working tasks: \(count)") }
+    monitor.start()
+    RunLoop.main.run(until: Date().addingTimeInterval(8))
+    monitor.stop()
 } else {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

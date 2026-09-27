@@ -8,7 +8,13 @@ A floating smoky-quartz widget that shows the **remaining weekly Codex limit** i
 
 Double-click **Codex Usage Tracker.app** to launch it. Drag it to your preferred position on the desktop. Right-click the orb (or use its small menu-bar icon) to refresh, change its size or colour scheme, bring it back into view, or quit.
 
-Hover over the orb to reveal two buttons: **New chat** (compose icon) and **Voice chat** (waveform icon). The smoke moves through a very slow 12-second cycle only while hovered, then pauses. A subtle shimmer inside the glass shares the same hover clock: both effects pause on exit and resume on re-entry. The percentage remains still. The animation respects macOS Reduce Motion.
+Hover over the orb to reveal two buttons: **New chat** (compose icon) and **Voice chat** (waveform icon). The smoke moves through a very slow 12-second cycle only while hovered, then pauses. A subtle shimmer inside the glass shares the same hover clock: both effects pause on exit and resume on re-entry. The percentage stays legible and does not shimmer. The animation respects macOS Reduce Motion.
+
+While any local Codex task is working, the orb gently floats and a light travels around its rim, even without hovering. This motion stops when all observed tasks finish, fail, are cancelled, or wait for input/approval. Hover smoke and shimmer keep their separate 12-second timing. Reduce Motion disables movement.
+
+![Working-state animation: the orb floats while AI is working, then stops](docs/orb-working.gif)
+
+*Example working-state preview, rendered from the app. [Still preview](docs/orb-working.png).*
 
 **New chat** uses the documented `codex://threads/new` link. **Voice chat** opens a new Codex chat and sends its documented **Control–Shift–V** shortcut only to the Codex process. This requires Accessibility permission for Codex Usage Tracker: the first click offers to open **System Settings → Privacy & Security → Accessibility**. Enable Codex Usage Tracker there, then click Voice chat again. If it is absent, use **+** to add this app. No permission is granted automatically. Codex handles any microphone/voice setup. If you have changed the voice shortcut in Codex, restore Control–Shift–V for this button.
 
@@ -23,7 +29,7 @@ References: [Codex deep links and keyboard shortcuts](https://learn.chatgpt.com/
 - Remembers its position and size. Floats across desktops.
 - Runs until you quit it. Open the app again after restarting your Mac; it has not been added to Login Items.
 
-The app is built locally for this Mac and signed with an ad-hoc signature. Source is included in `main.swift`, `WeeklyUsage.swift`, and `OrbInteraction.swift`. To rebuild, run `zsh build.sh` in this folder. The build also checks weekly-window selection, remaining-percentage calculation, unavailable data, freshness, hover/pause timing, smoke motion, and shimmer containment. Rendering checks need normal macOS graphics access.
+The app is built locally for this Mac and signed with an ad-hoc signature. Source is included in `main.swift`, `WeeklyUsage.swift`, `OrbInteraction.swift`, and `ActivityMonitor.swift`. To rebuild, run `zsh build.sh` in this folder. The build also checks weekly-window selection, remaining-percentage calculation, unavailable data, freshness, hover/pause timing, smoke motion, and shimmer containment. Rendering checks need normal macOS graphics access.
 
 The artwork was created using the built-in image generation tool. The transparent PNG is in `Assets/smoky-quartz.png`, and the exact generation prompt is in `Assets/design-prompt.txt`. The percentage is rendered live by the app; it is not part of the image.
 
@@ -45,3 +51,11 @@ A prebuilt macOS app archive is provided under `dist/`. It is ad-hoc signed, not
 ## Regenerate the preview
 
 Run `python3 scripts/render-preview.py` on macOS to render the GIF and PNG from the production view and shader code. The preview uses a fixed example percentage and does not connect to your Codex account.
+
+## Task activity detection
+
+The widget reads the local Codex thread index and subscribes as an observer to the desktop app's local IPC stream. It never starts or resumes tasks, sends prompts, or handles approvals. Only runtime status, pending-request count, revision, and owner IDs are retained; conversation text and tool payloads are discarded. No activity data is sent off the Mac.
+
+It follows up to 64 recently updated, unarchived local tasks, excluding internal subagents. New tasks are discovered every three seconds; completion and waiting updates arrive through the event stream. Remote/cloud-only tasks are not covered. The status meanings follow [Codex task runtime states](https://learn.chatgpt.com/docs/app-server#track-thread-status-changes), but the desktop IPC integration itself is internal and may need updating after a Codex release. If the connection is unavailable or the stream version is unsupported, the working animation stops and the tooltip reports activity unavailable.
+
+Run `python3 tests/activity_stream.py "Codex Usage Tracker.app/Contents/MacOS/CodexUsageTracker"` to test active, waiting, completed, and disconnected transitions against a local fixture server. Run `python3 scripts/render-preview.py --working` to regenerate the working-state GIF.

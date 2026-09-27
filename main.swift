@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import QuartzCore
 
-// This companion only reads usage. It never starts a model turn or consumes a reset.
+// This usage client only reads usage. It never starts a model turn or consumes a reset.
 final class UsageClient {
     var onUpdate: ((WeeklyUsage?, String?) -> Void)?
     private var process: Process?
@@ -89,7 +89,7 @@ final class UsageClient {
             input = stdinPipe.fileHandleForWriting
             armTimeout()
             send(["id": 1, "method": "initialize", "params": ["clientInfo": [
-                "name": "mako_orb", "title": "Mako companion orb", "version": "1.0.0"]]])
+                "name": "codex_usage_tracker", "title": "Codex Usage Tracker", "version": "1.0.0"]]])
         } catch { failed("Could not open Codex. Open Codex, then refresh.") }
     }
 
@@ -251,7 +251,7 @@ final class OrbView: NSView {
         let text = currentUsage.map { "\($0.display) weekly limit remaining" } ?? "Weekly usage unavailable"
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Mako's companion. \(text).")
+        setAccessibilityLabel("Codex Usage Tracker. \(text).")
         toolTip = issue ?? "\(text)\nHover for chat and voice · Drag to move\nUpdates every minute"
     }
 
@@ -332,7 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel = NSPanel(contentRect: NSRect(origin: origin, size: NSSize(width: size, height: size)),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "Mako Orb"
+        panel.title = "Codex Usage Tracker"
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.backgroundColor = .clear
@@ -352,15 +352,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentView = orb
         panel.orderFrontRegardless()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "circle.dotted.circle.fill", accessibilityDescription: "Mako Orb")
+        statusItem.button?.image = NSImage(systemSymbolName: "circle.dotted.circle.fill", accessibilityDescription: "Codex Usage Tracker")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked)
-        statusItem.button?.toolTip = "Mako's weekly usage orb"
+        statusItem.button?.toolTip = "Weekly Codex usage"
         client.onUpdate = { [weak self] usage, issue in
             guard let self else { return }
             self.orb.issue = issue
             self.orb.usage = usage
-            self.statusItem.button?.toolTip = usage.map { "Mako · \($0.display) weekly remaining" } ?? issue
+            self.statusItem.button?.toolTip = usage.map { "Codex Usage Tracker · \($0.display) weekly remaining" } ?? issue
         }
         client.start()
         redrawTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -380,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(panel.frame.origin.y, forKey: "orbY")
     }
     private func makeMenu() -> NSMenu {
-        let menu = NSMenu(title: "Mako Orb")
+        let menu = NSMenu(title: "Codex Usage Tracker")
         let label = orb.currentUsage.map { "Weekly remaining: \($0.display)" } ?? "Weekly usage unavailable"
         menu.addItem(withTitle: label, action: nil, keyEquivalent: "")
         if let issue = orb.issue {
@@ -411,7 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         colours.submenu = colourMenu
         let sizes = menu.addItem(withTitle: "Size", action: nil, keyEquivalent: ""); sizes.submenu = sizeMenu
         menu.addItem(.separator())
-        let quit = menu.addItem(withTitle: "Quit Mako Orb", action: #selector(quit), keyEquivalent: "q"); quit.target = self
+        let quit = menu.addItem(withTitle: "Quit Codex Usage Tracker", action: #selector(quit), keyEquivalent: "q"); quit.target = self
         return menu
     }
     @objc private func statusClicked() {

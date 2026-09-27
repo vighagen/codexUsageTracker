@@ -145,7 +145,7 @@ final class CodexActions {
         if action == .voice && !AXIsProcessTrusted() {
             let alert = NSAlert()
             alert.messageText = "Enable one-click voice"
-            alert.informativeText = "macOS requires Accessibility permission for Mako Orb to send Control–Shift–V to Codex. Enable Mako Orb in System Settings → Privacy & Security → Accessibility, then click the voice button again.\n\nYou can also open Codex and press Control–Shift–V yourself."
+            alert.informativeText = "macOS requires Accessibility permission for Codex Usage Tracker to send Control–Shift–V to Codex. Enable Codex Usage Tracker in System Settings → Privacy & Security → Accessibility, then click the voice button again.\n\nYou can also open Codex and press Control–Shift–V yourself."
             alert.addButton(withTitle: "Open Accessibility Settings")
             alert.addButton(withTitle: "Open Codex")
             alert.addButton(withTitle: "Cancel")

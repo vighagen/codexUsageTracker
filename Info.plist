@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleExecutable</key><string>MakoOrb</string>
-  <key>CFBundleIdentifier</key><string>local.mako.weekly-orb</string>
-  <key>CFBundleName</key><string>Mako Orb</string>
-  <key>CFBundleDisplayName</key><string>Mako Orb</string>
+  <key>CFBundleExecutable</key><string>CodexUsageTracker</string>
+  <key>CFBundleIdentifier</key><string>local.codex.usage-tracker</string>
+  <key>CFBundleName</key><string>Codex Usage Tracker</string>
+  <key>CFBundleDisplayName</key><string>Codex Usage Tracker</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.3.0</string>
-  <key>CFBundleVersion</key><string>4</string>
+  <key>CFBundleShortVersionString</key><string>1.3.1</string>
+  <key>CFBundleVersion</key><string>5</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>

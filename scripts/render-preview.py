@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-with tempfile.TemporaryDirectory(prefix='mako-preview-') as tmp:
+with tempfile.TemporaryDirectory(prefix='usage-tracker-preview-') as tmp:
     work = Path(tmp)
     bundle = work / 'Preview.app/Contents'
     (bundle / 'MacOS').mkdir(parents=True)
@@ -54,7 +54,7 @@ for index in 0..<160 {
     let context = NSGraphicsContext.current!.cgContext
     NSColor(calibratedRed: 0.065, green: 0.070, blue: 0.082, alpha: 1).setFill()
     NSRect(x: 0, y: 0, width: 420, height: 340).fill()
-    text("MAKO ORB", x: 24, y: 305, size: 13, color: .white, weight: .semibold)
+    text("CODEX USAGE TRACKER", x: 24, y: 305, size: 13, color: .white, weight: .semibold)
     text(hovering ? "HOVER" : (time < 2 ? "IDLE" : "PAUSED"), x: 324, y: 305,
          size: 11, color: NSColor(calibratedWhite: 0.72, alpha: 1), weight: .medium)
     context.saveGState()

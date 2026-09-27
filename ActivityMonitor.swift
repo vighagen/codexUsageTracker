@@ -9,22 +9,32 @@ struct TaskActivity {
     var requests = 0
     var revision: Int = -1
     var owner = ""
-    var working: Bool { status == "active" && flags.isEmpty && requests == 0 }
+    var streamShowsWork = false
+    var working: Bool {
+        (status == "active" || (status == "notLoaded" && streamShowsWork)) &&
+        !flags.contains("waitingOnUserInput") && !flags.contains("waitingOnApproval") && requests == 0
+    }
     mutating func snapshot(_ state: [String: Any], revision: Int) {
         let runtime = state["threadRuntimeStatus"] as? [String: Any] ?? [:]
         status = runtime["type"] as? String ?? "notLoaded"
         flags = runtime["activeFlags"] as? [String] ?? []
         requests = (state["requests"] as? [Any])?.count ?? 0
+        streamShowsWork = false
         self.revision = revision
     }
     mutating func patches(_ changes: [[String: Any]], base: Int, revision: Int) -> Bool {
-        guard base == self.revision else { status = "notLoaded"; return false }
+        // Large desktop tasks can send live deltas without an initial snapshot.
+        // Apply independent status fields and current-tail execution evidence anyway.
+        // A missing revision must not erase work confirmed by another live update.
+        let continuous = self.revision == base
+        if revision <= self.revision { return true }
         for patch in changes {
             let path = patch["path"] as? [Any] ?? []
             let op = patch["op"] as? String ?? ""
             if path.isEmpty, let value = patch["value"] as? [String: Any] {
                 snapshot(value, revision: revision)
             } else if path.first as? String == "threadRuntimeStatus" {
+                streamShowsWork = false
                 if path.count == 1 {
                     let value = patch["value"] as? [String: Any] ?? [:]
                     status = value["type"] as? String ?? "notLoaded"
@@ -32,6 +42,7 @@ struct TaskActivity {
                 } else if path[1] as? String == "type" {
                     status = patch["value"] as? String ?? "notLoaded"
                 } else if path[1] as? String == "activeFlags" {
+                    status = "active"
                     if path.count == 2 { flags = patch["value"] as? [String] ?? [] }
                     else if let index = path[2] as? Int {
                         if op == "remove", flags.indices.contains(index) { flags.remove(at: index) }
@@ -41,6 +52,8 @@ struct TaskActivity {
                         }
                     }
                 }
+            } else if status == "notLoaded", Self.isLiveExecutionPatch(path: path, value: patch["value"]) {
+                streamShowsWork = true
             } else if path.first as? String == "requests" {
                 if path.count == 1 { requests = (patch["value"] as? [Any])?.count ?? 0 }
                 else if path.count == 2 {
@@ -50,7 +63,19 @@ struct TaskActivity {
             }
         }
         self.revision = revision
-        return true
+        return continuous
+    }
+    private static func isLiveExecutionPatch(path: [Any], value: Any?) -> Bool {
+        // Only individual items in the current streaming tail qualify. Loading an
+        // old history page, changing a title, or updating usage is not proof of work.
+        guard path.count >= 6, path[0] as? String == "turnHistory",
+              path[1] as? String == "history", path[2] as? String == "entitiesByKey",
+              let key = path[3] as? String, key.hasPrefix("tail:"),
+              path[4] as? String == "items", let item = value as? [String: Any],
+              let type = item["type"] as? String else { return false }
+        if type == "reasoning" { return true }
+        return ["mcpToolCall", "dynamicToolCall", "commandExecution", "fileChange", "webSearch", "collabAgentToolCall"].contains(type)
+            && ["inProgress", "running"].contains(item["status"] as? String ?? "")
     }
 }
 
@@ -77,23 +102,23 @@ final class ActivityMonitor {
     }
     private var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
     private func publish(connected: Bool) {
-        let connected = connected && !unsupportedProtocol
         let count = connected ? tasks.values.filter(\.working).count : 0
+        let connected = connected && (!unsupportedProtocol || count > 0)
         let key = "\(count):\(connected)"
         guard key != published else { return }; published = key
         DispatchQueue.main.async { [weak self] in self?.onUpdate?(count, connected) }
     }
-    private func candidates() -> [String] {
+    private func candidates() -> [String]? {
         let paths = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         guard let dbPath = paths.filter({ $0.lastPathComponent.hasPrefix("state_") && $0.pathExtension == "sqlite" })
-            .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending }).first else { return [] }
+            .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending }).first else { return nil }
         var db: OpaquePointer?
-        guard sqlite3_open_v2(dbPath.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { if let db { sqlite3_close(db) }; return [] }
+        guard sqlite3_open_v2(dbPath.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { if let db { sqlite3_close(db) }; return nil }
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 200)
         var statement: OpaquePointer?
-        let query = "SELECT id FROM threads WHERE archived=0 AND source NOT LIKE '%subagent%' ORDER BY updated_at DESC LIMIT 64"
-        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { return [] }
+        let query = "SELECT id FROM threads WHERE archived=0 ORDER BY updated_at DESC"
+        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
         var ids: [String] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -119,7 +144,8 @@ final class ActivityMonitor {
     }
     private func refreshSubscriptions() {
         guard !clientID.isEmpty else { return }
-        let ids = Set(candidates())
+        guard let candidates = candidates() else { return }
+        let ids = Set(candidates)
         for id in subscribed.subtracting(ids) { follow(id, enabled: false); tasks.removeValue(forKey: id) }
         for id in ids.subtracting(subscribed) { follow(id, enabled: true) }
         subscribed = ids
@@ -157,7 +183,9 @@ final class ActivityMonitor {
         if change["type"] as? String == "snapshot", let state = change["conversationState"] as? [String: Any] {
             task.snapshot(state, revision: revision)
         } else if change["type"] as? String == "patches", let patches = change["patches"] as? [[String: Any]] {
-            if !task.patches(patches, base: change["baseRevision"] as? Int ?? -2, revision: revision) {
+            let wasKnown = task.revision >= 0
+            let continuous = task.patches(patches, base: change["baseRevision"] as? Int ?? -2, revision: revision)
+            if wasKnown && !continuous {
                 follow(id, enabled: false); follow(id, enabled: true)
             }
         }
@@ -228,5 +256,18 @@ func runActivityTests() {
     state.snapshot(["threadRuntimeStatus": ["type": "active", "activeFlags": ["waitingOnApproval"]]], revision: 7)
     precondition(!state.working)
     precondition(!state.patches([], base: 2, revision: 8) && !state.working)
-    print("Activity checks passed: running, waiting, approval, resume, completion, and missing revision")
+    var project = TaskActivity()
+    let livePath: [Any] = ["turnHistory", "history", "entitiesByKey", "tail:0:local:fixture", "items", 175]
+    precondition(!project.patches([["op": "replace", "path": livePath,
+                                   "value": ["type": "reasoning"]]], base: 2500, revision: 2501))
+    precondition(project.working, "Snapshot-less project streams must count as work")
+    let idle = TaskActivity()
+    precondition([idle, project].filter(\.working).count == 1, "An idle task must not hide another active task")
+    _ = project.patches([["op": "replace", "path": ["threadRuntimeStatus"], "value": ["type": "idle"]]], base: 2501, revision: 2502)
+    precondition(!project.working, "Completion must clear inferred work")
+    var history = TaskActivity()
+    _ = history.patches([["op": "replace", "path": ["turnHistory", "history", "entitiesByKey", "page:older", "items", 1],
+                          "value": ["type": "reasoning"]]], base: 1, revision: 2)
+    precondition(!history.working, "Reading old history must not start the animation")
+    print("Activity checks passed: running, waiting, approval, resume, completion, missing revision, snapshot-less project streams, and multiple tasks")
 }

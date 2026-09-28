@@ -18,7 +18,7 @@ struct TaskActivity {
         let runtime = state["threadRuntimeStatus"] as? [String: Any] ?? [:]
         status = runtime["type"] as? String ?? "notLoaded"
         flags = runtime["activeFlags"] as? [String] ?? []
-        requests = (state["requests"] as? [Any])?.count ?? 0
+        requests = state["activityPendingRequestCount"] as? Int ?? (state["requests"] as? [Any])?.count ?? 0
         streamShowsWork = false
         self.revision = revision
     }
@@ -76,6 +76,104 @@ struct TaskActivity {
         if type == "reasoning" { return true }
         return ["mcpToolCall", "dynamicToolCall", "commandExecution", "fileChange", "webSearch", "collabAgentToolCall"].contains(type)
             && ["inProgress", "running"].contains(item["status"] as? String ?? "")
+    }
+}
+
+/// Projects oversized snapshots as they arrive, without retaining conversation text.
+/// The scanner only keeps bounded JSON tokens and the small activity envelope.
+private final class ActivitySnapshotProjection {
+    private struct Container {
+        let path: [String]
+        let isArray: Bool
+        var key = ""
+        var expectsKey = true
+        var index = 0
+    }
+    private var stack: [Container] = []
+    private var inString = false
+    private var escaped = false
+    private var token = Data()
+    private var truncated = false
+    private var readingLiteral = false
+    private var metadata: [String: Any] = [:]
+    private var params: [String: Any] = [:]
+    private var change: [String: Any] = [:]
+    private var runtime: [String: Any] = [:]
+    private var flags: [String] = []
+    private var requests = 0
+    private let statePath = ["params", "change", "conversationState"]
+    private var valuePath: [String] {
+        guard let parent = stack.last else { return [] }
+        return parent.path + [parent.isArray ? String(parent.index) : parent.key]
+    }
+    private func finishValue() {
+        guard !stack.isEmpty else { return }
+        if stack[stack.count - 1].isArray { stack[stack.count - 1].index += 1 }
+        else { stack[stack.count - 1].expectsKey = true; stack[stack.count - 1].key = "" }
+    }
+    private func append(_ byte: UInt8) {
+        if token.count < 1024 { token.append(byte) } else { truncated = true }
+    }
+    private func scalar(_ value: Any) {
+        let path = valuePath
+        if path.count == 1, ["type", "method", "version", "sourceClientId"].contains(path[0]) {
+            metadata[path[0]] = value
+        } else if path.count == 2, path[0] == "params", ["hostId", "conversationId"].contains(path[1]) {
+            params[path[1]] = value
+        } else if path.count == 3, Array(path.prefix(2)) == ["params", "change"], ["type", "revision"].contains(path[2]) {
+            change[path[2]] = value
+        } else if path == statePath + ["threadRuntimeStatus", "type"] {
+            runtime["type"] = value
+        } else if path.count == 6, Array(path.prefix(5)) == statePath + ["threadRuntimeStatus", "activeFlags"], let flag = value as? String {
+            flags.append(flag)
+        }
+        finishValue()
+    }
+    func consume(_ bytes: Data) {
+        for byte in bytes {
+            if inString {
+                append(byte)
+                if escaped { escaped = false }
+                else if byte == 92 { escaped = true }
+                else if byte == 34 {
+                    inString = false
+                    let value = !truncated ? (try? JSONSerialization.jsonObject(with: token, options: .fragmentsAllowed)) : nil
+                    if !stack.isEmpty, !stack[stack.count - 1].isArray, stack[stack.count - 1].expectsKey {
+                        stack[stack.count - 1].key = value as? String ?? ""
+                        stack[stack.count - 1].expectsKey = false
+                    } else { scalar(value ?? NSNull()) }
+                    token.removeAll(keepingCapacity: true)
+                }
+                continue
+            }
+            if readingLiteral {
+                if byte != 44 && byte != 93 && byte != 125 && byte > 32 { append(byte); continue }
+                scalar((try? JSONSerialization.jsonObject(with: token, options: .fragmentsAllowed)) ?? NSNull())
+                readingLiteral = false; token.removeAll(keepingCapacity: true)
+            }
+            switch byte {
+            case 34:
+                inString = true; escaped = false; truncated = false; token = Data([34])
+            case 123, 91:
+                stack.append(Container(path: valuePath, isArray: byte == 91))
+            case 125, 93:
+                if let container = stack.popLast(), container.path == statePath + ["requests"], container.isArray {
+                    requests = container.index
+                }
+                finishValue()
+            case 44, 58, 0...32: break
+            default:
+                readingLiteral = true; truncated = false; token = Data([byte])
+            }
+        }
+    }
+    func result() -> [String: Any]? {
+        guard stack.isEmpty, !inString, change["type"] as? String == "snapshot", runtime["type"] != nil else { return nil }
+        runtime["activeFlags"] = flags
+        // Preserve the exact count so incremental removals cannot clear another request.
+        change["conversationState"] = ["threadRuntimeStatus": runtime, "activityPendingRequestCount": requests]
+        params["change"] = change; metadata["params"] = params
+        return metadata
     }
 }
 
@@ -166,17 +264,13 @@ final class ActivityMonitor {
            let id = params["conversationId"] as? String, subscribed.contains(id) {
             follow(id, enabled: true); return
         }
-        if method == "client-status-changed", params["status"] as? String == "connected" {
-            for id in subscribed { follow(id, enabled: true) }
-            return
-        }
         if method == "client-status-changed", params["status"] as? String == "disconnected", let owner = params["clientId"] as? String {
             tasks = tasks.filter { $0.value.owner != owner }; publish(connected: !clientID.isEmpty); return
         }
         guard method == "thread-stream-state-changed", params["hostId"] as? String == "local",
               let id = params["conversationId"] as? String, subscribed.contains(id),
               let change = params["change"] as? [String: Any] else { return }
-        guard message["version"] as? Int == 11 else { unsupportedProtocol = true; tasks.removeValue(forKey: id); publish(connected: false); return }
+        guard message["version"] as? Int == 11 else { unsupportedProtocol = true; tasks.removeValue(forKey: id); publish(connected: true); return }
         var task = tasks[id] ?? TaskActivity()
         task.owner = message["sourceClientId"] as? String ?? ""
         let revision = change["revision"] as? Int ?? -1
@@ -216,18 +310,35 @@ final class ActivityMonitor {
                 send(["type": "request", "method": "initialize", "requestId": "usage-tracker-activity", "version": 0,
                       "params": ["clientType": "usage-tracker"]])
                 var buffer = Data(), bytes = [UInt8](repeating: 0, count: 65536)
+                var frameRemaining = 0
+                var frame = Data()
+                var projection: ActivitySnapshotProjection?
                 var nextRefresh = Date().addingTimeInterval(3)
                 var valid = true
                 while !isStopped && valid {
                     let n = recv(socketFD, &bytes, bytes.count, 0)
                     if n > 0 { buffer.append(contentsOf: bytes.prefix(n)) }
                     else if n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) { break }
-                    while buffer.count >= 4 {
-                        let size = buffer.prefix(4).enumerated().reduce(0) { $0 | Int($1.element) << ($1.offset * 8) }
-                        if size <= 0 || size > 48 * 1024 * 1024 { valid = false; break }
-                        guard buffer.count >= size + 4 else { break }
-                        let data = buffer.subdata(in: 4..<(size + 4)); buffer.removeSubrange(0..<(size + 4))
-                        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { receive(object) }
+                    while !buffer.isEmpty {
+                        if frameRemaining == 0 {
+                            guard buffer.count >= 4 else { break }
+                            let size = buffer.prefix(4).enumerated().reduce(0) { $0 | Int($1.element) << ($1.offset * 8) }
+                            // Match the desktop transport limit. Large snapshots are projected
+                            // incrementally instead of disconnecting every active task.
+                            if size <= 0 || size > 256 * 1024 * 1024 { valid = false; break }
+                            buffer.removeFirst(4); frameRemaining = size
+                            projection = size > 48 * 1024 * 1024 ? ActivitySnapshotProjection() : nil
+                            frame.removeAll(keepingCapacity: false)
+                        }
+                        let length = min(frameRemaining, buffer.count)
+                        let chunk = Data(buffer.prefix(length))
+                        if let projection { projection.consume(chunk) } else { frame.append(chunk) }
+                        buffer.removeFirst(length); frameRemaining -= length
+                        if frameRemaining == 0 {
+                            let object = projection != nil ? projection?.result() : (try? JSONSerialization.jsonObject(with: frame) as? [String: Any])
+                            if let object { receive(object) }
+                            projection = nil; frame.removeAll(keepingCapacity: false)
+                        }
                     }
                     if Date() >= nextRefresh { refreshSubscriptions(); publish(connected: !clientID.isEmpty); nextRefresh = Date().addingTimeInterval(3) }
                 }

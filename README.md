@@ -61,3 +61,5 @@ It follows all unarchived local tasks in the Codex thread index, including proje
 Run `python3 tests/activity_stream.py "Codex Usage Tracker.app/Contents/MacOS/CodexUsageTracker"` to test active, waiting, completed, and disconnected transitions against a local fixture server. Run `python3 scripts/render-preview.py --working` to regenerate the working-state GIF.
 
 Regression check for concurrent tasks, older projects, and missing initial snapshots: `python3 tests/activity_multiple_tasks.py "Codex Usage Tracker.app/Contents/MacOS/CodexUsageTracker"`.
+
+Account changes are automatic. Each usage refresh launches a fresh Codex reader so credentials from an earlier session are not reused. Changes to local sign in file metadata trigger an immediate refresh; other credential stores are picked up on the next refresh within one minute. The widget stores no account identity or credentials. Accounts without a weekly usage window show usage unavailable.

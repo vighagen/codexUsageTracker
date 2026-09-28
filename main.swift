@@ -15,9 +15,29 @@ final class UsageClient {
     private var pendingID: Int?
     private var timeout: DispatchWorkItem?
     private var timer: Timer?
+    private var signInTimer: Timer?
+    private var signInRevision = ""
+
+    // Observe file metadata only. Never read or retain credentials or account identity.
+    private func currentSignInRevision() -> String {
+        let root = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: root + "/auth.json") else { return "absent" }
+        return [attributes[.modificationDate], attributes[.systemFileNumber], attributes[.size]]
+            .map { String(describing: $0) }.joined(separator: ":")
+    }
 
     func start() {
+        signInRevision = currentSignInRevision()
         refresh()
+        signInTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let revision = self.currentSignInRevision()
+            guard revision != self.signInRevision else { return }
+            self.signInRevision = revision
+            self.disconnect()
+            self.onUpdate?(nil, "Refreshing usage for the current Codex session…")
+            self.refresh()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                          object: nil, queue: .main) { [weak self] _ in self?.refresh() }
@@ -26,6 +46,8 @@ final class UsageClient {
     func stop() {
         timer?.invalidate()
         timer = nil
+        signInTimer?.invalidate()
+        signInTimer = nil
         disconnect()
     }
 
@@ -46,7 +68,8 @@ final class UsageClient {
 
     func refresh() {
         guard pendingID == nil else { return }
-        if initialized, process?.isRunning == true { requestUsage(); return }
+        // A helper caches authentication in memory. Start a fresh reader for every
+        // refresh so account switches also work with keychain backed sign in.
         connect()
     }
 
@@ -128,7 +151,7 @@ final class UsageClient {
             pendingID = nil
             timeout?.cancel()
             if let result = message["result"] as? [String: Any] { publish(result) }
-            else { onUpdate?(nil, "Usage unavailable. Check your Codex sign-in, then refresh.") }
+            else { failed("Usage unavailable for the current Codex session. Retrying automatically.") }
         } else if (message["method"] as? String) == "account/rateLimits/updated",
                   let result = message["params"] as? [String: Any] { publish(result) }
         else if message["id"] != nil, message["method"] != nil {
